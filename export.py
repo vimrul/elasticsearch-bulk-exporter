@@ -4,7 +4,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 # Elasticsearch details
-ES_URL = "http://192.168.1.12:9200" # Change this
+ES_URL = "http://localhost:9200" # Change this
 USERNAME = "your_username"  # Change this
 PASSWORD = "your_password"  # Change this
 INDEX = "filebeat-*"
