@@ -1,112 +1,104 @@
-# elasticsearch-bulk-exporter
-A simple and efficient tool to export large Elasticsearch datasets to JSON &amp; CSV, using the Scroll API with authentication support.
+# Elasticsearch Bulk Exporter
 
-# 🚀 Elasticsearch Bulk Exporter
+A small Python reference utility for retrieving Elasticsearch log search results in batches with the Scroll API and writing selected fields to CSV.
 
-A **Python script** to efficiently **export large datasets** from **Elasticsearch** to **JSON and CSV**. Supports **authentication, pagination (Scroll API), and incremental writing**, making it suitable for handling millions of records.
+The useful operational idea is to process one batch at a time rather than collect all search results in memory. The repository contains a single readable script, [export.py](export.py), so its behavior and limits can be inspected directly.
 
----
+**Status:** reference script. CSV export is the clearest output path in the current implementation. The JSON output has a multi-batch formatting limitation described below. No large-volume benchmark is included.
 
-## 🔹 Features
-✔ **Exports Elasticsearch data to JSON & CSV**  
-✔ **Handles large datasets using Scroll API** (prevents timeouts)  
-✔ **Supports authentication (username & password)**  
-✔ **Saves data incrementally** (avoids memory overload)  
-✔ **Clears Scroll ID** to free Elasticsearch memory  
-✔ **Live progress tracking** during export  
+## How it works
 
----
-
-## 🔧 Requirements
-Ensure you have **Python 3** and the required dependencies installed:
-
-```sh
-pip install requests
+```text
+Configured index + query
+        |
+Initial Elasticsearch search (5-minute scroll context)
+        |
+Write one batch --> export.csv + export.json --> progress count
+        |
+Request next batch until empty
+        |
+Close output files and request scroll cleanup
 ```
 
----
+## What this demonstrates
 
-## 🚀 How to Use
+- Authenticated HTTP requests using Python and Requests.
+- Paginated retrieval using a scroll context.
+- Incremental file writing and progress reporting.
+- Extraction of timestamp/message fields from log records.
 
-### **1️⃣ Clone the Repository**
-```sh
-git clone https://github.com/yourusername/elasticsearch-bulk-exporter.git
+## Setup
+
+Use Python 3 and an isolated environment:
+
+```bash
+git clone https://github.com/vimrul/elasticsearch-bulk-exporter.git
 cd elasticsearch-bulk-exporter
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install requests
 ```
 
-### **2️⃣ Update Configuration**
-Edit `export.py` and replace **Elasticsearch details** with your own:
-```python
-ES_URL = "http://your-elasticsearch-server:9200"
-USERNAME = "your_username"
-PASSWORD = "your_password"
-INDEX = "filebeat-*"
-```
+Edit a **local copy** of `export.py` for your environment:
 
-### **3️⃣ Run the Export Script**
-```sh
+| Setting | Current example | What to change |
+| --- | --- | --- |
+| `ES_URL` | `http://localhost:9200` | Authorized Elasticsearch endpoint; use HTTPS when required |
+| `USERNAME`, `PASSWORD` | Placeholder credentials | Local authentication values; never commit real credentials |
+| `INDEX` | `filebeat-*` | Index or index pattern you are authorized to read |
+| `QUERY["size"]` | `5000` | Batch size appropriate to record size and available memory |
+| `QUERY["_source"]` | `@timestamp`, `message` | Fields required by the current CSV-writing code |
+| `QUERY["query"]` | An example `match_phrase` filter | Replace with the intended search; it does not export all documents by default |
+
+For a small controlled test, choose a dedicated test index and a narrow query. A `match_phrase` query should not be treated as a wildcard query merely because its text contains asterisks.
+
+Run:
+
+```bash
 python export.py
 ```
-This will:  
-✅ Fetch records in **batches**  
-✅ Write them **incrementally** to `export.json` and `export.csv`  
-✅ Display **progress updates**  
 
----
+On a run with matching documents, output files are opened in write mode and existing files of the same names are overwritten. Keep previous exports elsewhere before rerunning.
 
-## 📄 Example Output
+## Outputs and validation
+
+- **`export.csv`**: header `timestamp,message`, then values from each hit's `_source`.
+- **`export.json`**: full hit objects written as an array for each batch.
+- **Console**: running count and a completion message after the normal path finishes.
+
+Validate CSV using a parser rather than counting physical lines, because messages can contain line breaks:
+
+```bash
+python - <<'PY'
+import csv
+with open("export.csv", newline="") as source:
+    reader = csv.DictReader(source)
+    count = sum(1 for _ in reader)
+print(f"CSV records: {count}")
+PY
 ```
-Exported 5000 records so far...
-Exported 10000 records so far...
-Export completed successfully! Total records exported: 29729771
-```
 
----
+Compare the parsed row count to the script's reported count and your controlled input. Check representative timestamps/messages. Successful printing alone does not establish completeness.
 
-## 🛠️ Configuration Options
-| Parameter       | Default Value        | Description |
-|---------------|-----------------|-------------|
-| `ES_URL`      | `"http://localhost:9200"` | Elasticsearch server URL |
-| `USERNAME`    | `"your_username"` | Elasticsearch authentication username |
-| `PASSWORD`    | `"your_password"` | Elasticsearch authentication password |
-| `INDEX`       | `"filebeat-*"` | Elasticsearch index pattern |
-| `size`        | `5000` | Number of records fetched per request (adjust for performance) |
-| `scroll`      | `"5m"` | Scroll time to keep the search context active |
+## Current limitations
 
----
+- **JSON across multiple batches is not one valid JSON document.** Each batch is dumped as an array without a surrounding container or separator. Do not feed a multi-batch `export.json` directly to a normal JSON parser. CSV is the usable structured export path until the JSON writer is changed.
+- The script retains the initial scroll ID rather than updating it if the server returns a different ID.
+- HTTP status checking, request timeouts, retries, and resumable checkpoints are not implemented.
+- Scroll cleanup runs at the end of the normal path, not in a guaranteed cleanup handler.
+- Missing `@timestamp` or `message` fields can raise an exception.
+- Credentials are configured in the script; environment-variable or secret-store integration is not implemented.
+- The output is a selected log export, not a restorable Elasticsearch snapshot or a bulk-import file.
+- No automated tests or performance results are included.
 
-## 🛠️ Troubleshooting
-**Q: Kibana shows a timeout (502 Bad Gateway). What should I do?**  
-✔ Use the **Scroll API** instead of regular queries. This script handles that.  
-✔ Reduce `"size": 5000` to `"size": 2000` to avoid memory overload.  
+These constraints are visible in the implementation and are documented here so users can make an informed choice before running it.
 
-**Q: How do I export a different Elasticsearch index?**  
-✔ Change the `INDEX` variable inside the script (`"filebeat-*"` → `"your_index-*"`).  
+## Failure and recovery
 
-**Q: How do I run this script in the background?**  
-✔ Use **nohup**:
-```sh
-nohup python export.py > export.log 2>&1 &
-```
-✔ Or use **screen**:
-```sh
-screen -S elasticsearch_export
-python export.py
-```
-Press `CTRL+A` then `D` to **detach** from the session.
+If an export stops, treat the output as partial. Inspect the error, verify authentication and the query, and reduce batch size if needed. Preserve or move partial files before another run. The current script restarts from the initial search and does not resume a previous export.
 
----
+Do not disable TLS verification to work around certificate failures. Handle exported logs as potentially sensitive and keep them out of public repositories.
 
-## 📜 License
-This project is licensed under the **MIT License**.
+For API behavior and scroll lifecycle, see the [Elasticsearch Scroll API](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-scroll).
 
----
-
-## ❤️ Contributing
-Pull requests are welcome! If you find a bug or have an idea to improve the script, feel free to **open an issue** or submit a PR.
-
----
-
-## 🌟 Support & Feedback
-If this script helped you, please ⭐ **star the repository** and spread the word! 🚀
-
+Author: [Mohammad Imrul Hasan](https://imrul.net/).
